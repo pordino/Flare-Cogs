@@ -15,7 +15,7 @@ class Highlight(commands.Cog):
         default_channel = {"highlight": {}, "toggle": {}, "bots": {}}
         self.config.register_channel(**default_channel)
 
-    __version__ = "1.1.4dev2"
+    __version__ = "1.1.4dev3"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
@@ -43,7 +43,7 @@ class Highlight(commands.Cog):
 
                     toggle = await self.config.channel(message.channel).toggle()
                     if not toggle[user]:
-                        logging.debug(
+                        logger.info(
                             "{} matched however user {} has highlighting disabled.".format(
                                 word, user
                             )
@@ -58,7 +58,7 @@ class Highlight(commands.Cog):
                     msglist.reverse()
                     highlighted = message.guild.get_member(int(user))
                     if highlighted is None:
-                        logging.debug(
+                        logger.info(
                             "Can't find user {} in the guild {}".format(
                                 str(highlighted), message.guild
                             )
@@ -78,7 +78,7 @@ class Highlight(commands.Cog):
                         f"Your highlighted word `{word}` was mentioned in <#{message.channel.id}> in {message.guild.name} by {message.author.display_name}.\n",
                         embed=embed,
                     )
-                    logging.debug("Highligted message sent to {}".format(highlight))
+                    logger.info("Highligted message sent to {}".format(highlighted))
 
     @commands.guild_only()
     @commands.group(autohelp=True)
