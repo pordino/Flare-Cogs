@@ -1,6 +1,9 @@
 from redbot.core import commands, Config, checks
 import discord
 from typing import Optional, Union
+import logging
+
+logger = logging.getLogger("red.flare.highlight")
 
 
 class Highlight(commands.Cog):
@@ -12,7 +15,7 @@ class Highlight(commands.Cog):
         default_channel = {"highlight": {}, "toggle": {}, "bots": {}}
         self.config.register_channel(**default_channel)
 
-    __version__ = "1.1.4"
+    __version__ = "1.1.4dev1"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
@@ -40,6 +43,11 @@ class Highlight(commands.Cog):
 
                     toggle = await self.config.channel(message.channel).toggle()
                     if not toggle[user]:
+                        logging.debug(
+                            "{} matched however user {} has highlighting disabled.".format(
+                                word, user
+                            )
+                        )
                         continue
                     msglist = []
                     msglist.append(message)
@@ -52,6 +60,11 @@ class Highlight(commands.Cog):
                     if highlighted is None:
                         highlighted = await self.bot.fetch_user(int(user))
                     if highlighted not in message.guild.members:
+                        logging.debug(
+                            "Can't find user {} in the guild {}".format(
+                                str(highlighted), message.guild
+                            )
+                        )
                         continue
                     context = "\n".join([f"**{x.author}**: {x.content}" for x in msglist])
                     if len(context) > 2000:
@@ -67,6 +80,7 @@ class Highlight(commands.Cog):
                         f"Your highlighted word `{word}` was mentioned in <#{message.channel.id}> in {message.guild.name} by {message.author.display_name}.\n",
                         embed=embed,
                     )
+                    logging.debug("Highligted message sent to {}".format(highlight))
 
     @commands.guild_only()
     @commands.group(autohelp=True)
