@@ -1,30 +1,35 @@
-from redbot.core import commands
-from redbot.core.utils.chat_formatting import humanize_number
-from redbot.core.utils.menus import menu, DEFAULT_CONTROLS
-import discord
 import aiohttp
-import typing
-import datetime
-import validators
+from redbot.core import commands
+
+from .menus import ArticleFormat, GenericMenu
 
 
 class News(commands.Cog):
     """News Cog."""
 
-    __version__ = "0.0.1"
+    __version__ = "0.0.3"
+    __author__ = "flare#0001"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
         pre_processed = super().format_help_for_context(ctx)
-        return f"{pre_processed}\nCog Version: {self.__version__}"
+        return f"{pre_processed}\nCog Version: {self.__version__}\nAuthor: {self.__author__}"
 
     def __init__(self, bot):
         self.bot = bot
         self.api = (
-            "https://newsapi.org/v2/{}?{}&sortBy=publishedAt&pageSize=100{}&apiKey={}&page=1{}"
+            "https://newsapi.org/v2/{}?{}&sortBy=publishedAt{}&apiKey={}&page=1&pageSize=15{}"
         )
-        self.session = aiohttp.ClientSession(loop=self.bot.loop)
+        self.session = aiohttp.ClientSession()
         self.newsapikey = None
+
+    async def red_get_data_for_user(self, *, user_id: int):
+        # this cog does not story any data
+        return {}
+
+    async def red_delete_data_for_user(self, *, requester, user_id: int) -> None:
+        # this cog does not story any data
+        pass
 
     async def initalize(self):
         token = await self.bot.get_shared_api_tokens("newsapi")
@@ -53,21 +58,30 @@ class News(commands.Cog):
 
     @commands.group()
     async def news(self, ctx):
-        """Group Command for News"""
-        pass
+        """Group Command for News."""
+
+    @commands.command()
+    async def newssetup(self, ctx):
+        """Instructions on how to setup news related APIs."""
+        msg = "**News API Setup**\n**1**. Visit https://newsapi.org and register for an API.\n**2**. Use the following command: {}set api newsapi key <api_key_here>\n**3**. Reload the cog if it doesnt work immediately.".format(
+            ctx.prefix
+        )
+        await ctx.maybe_send_embed(msg)
 
     @news.command(hidden=True)
     async def countrycodes(self, ctx):
-        """Countries supported by the News Cog"""
+        """Countries supported by the News Cog."""
         await ctx.send(
             "Valid country codes are:\nae ar at au be bg br ca ch cn co cu cz de eg fr gb gr hk hu id ie il in it jp kr lt lv ma mx my ng nl no nz ph pl pt ro rs ru sa se sg si sk th tr tw ua us ve za"
         )
 
     @news.command()
     async def top(self, ctx, countrycode: str, *, query: str = None):
-        """Top News from a Country - County must be 2-letter ISO 3166-1 code.
-        
-        Check [p]countrycodes for a list of all possible country codes supported."""
+        """
+        Top News from a Country - County must be 2-letter ISO 3166-1 code. Supports querys to search news.
+
+        Check [p]news countrycodes for a list of all possible country codes supported.
+        """
         async with ctx.typing():
             data = await self.get(
                 self.api.format(
@@ -86,79 +100,42 @@ class News(commands.Cog):
                     ctx.prefix
                 )
             )
-        embeds = []
-        total = 15 if len(data["articles"]) > 15 else len(data["articles"])
-        for i, article in enumerate(data["articles"][:15], 1):
-            embed = discord.Embed(
-                title=article["title"],
-                color=await self.bot.get_embed_color(ctx.channel),
-                description=f"[Click Here for Full Article]({article['url']})\n\n{article['description']}",
-                timestamp=datetime.datetime.fromisoformat(article["publishedAt"].replace("Z", "")),
+        await GenericMenu(source=ArticleFormat(data["articles"][:15]), ctx=ctx,).start(
+            ctx=ctx,
+            wait=False,
+        )
+
+    @news.command(name="global")
+    async def global_all(self, ctx, *, query: str = None):
+        """News from around the World.
+
+        Not considered top-headlines. May be unreliable, unknown etc.
+        """
+        async with ctx.typing():
+            data = await self.get(
+                self.api.format("everything", "q={}".format(query), "", self.newsapikey, "")
             )
-            if validators.url(article["urlToImage"]):
-                embed.set_image(url=article["urlToImage"])
-            embed.set_author(name=f"{article['author']} - {article['source']['name']}")
-            embed.set_footer(text=f"Article {i}/{total}")
-            embeds.append(embed)
-        if len(embeds) == 1:
-            await ctx.send(embed=embeds[0])
-        else:
-            await menu(ctx, embeds, DEFAULT_CONTROLS, timeout=90)
+        if data.get("failed") is not None:
+            return await ctx.send(data.get("failed"))
+        if data["totalResults"] == 0:
+            return await ctx.send("No results found.")
+        await GenericMenu(source=ArticleFormat(data["articles"]), ctx=ctx,).start(
+            ctx=ctx,
+            wait=False,
+        )
 
-    # @news.command(name="global")
-    # async def global_all(self, ctx, *, query: str = None):
-    #     """News from the World."""
-    #     async with ctx.typing():
-    #         print(self.api.format("everything", "q={}".format(query) if query is not None else "", "", self.newsapikey, ""))
-    #         data = await self.get(self.api.format("everything", "q={}".format(query) if query is not None else "", "", self.newsapikey, ""))
-    #     if data.get("failed") is not None:
-    #         return await ctx.send(data.get("failed"))
-    #     if data["totalResults"] == 0:
-    #         return await ctx.send(
-    #             "No results found."
-    #         )
-    #     embeds = []
-    #     for i, article in enumerate(data["articles"][:15], 1):
-    #         embed = discord.Embed(
-    #             title=article["title"],
-    #             color=await self.bot.get_embed_color(ctx.channel),
-    #             description=f"[Click Here for Full Article]({article['url']})\n\n{article['description']}",
-    #             timestamp=datetime.datetime.fromisoformat(article["publishedAt"].replace("Z", "")),
-    #         )
-    #         embed.set_image(url=article["urlToImage"])
-    #         embed.set_author(name=f"{article['author']} - {article['source']['name']}")
-    #         embed.set_footer(text=f"Article {i}/{data['totalResults']}")
-    #         embeds.append(embed)
-    #     if len(embeds) == 1:
-    #         await ctx.send(embed=embeds[0])
-    #     else:
-    #         await menu(ctx, embeds, DEFAULT_CONTROLS, timeout=90)
-
-    # @news.command()
-    # async def topglobal(self, ctx, *, query: str = None):
-    #     """News from the World."""
-    #     async with ctx.typing():
-    #         print(self.api.format("top-headlines", "q={}".format(query) if query is not None else "", "", self.newsapikey, ""))
-    #         data = await self.get(self.api.format("everything", "q={}".format(query) if query is not None else "", "", self.newsapikey, ""))
-    #     if data.get("failed") is not None:
-    #         return await ctx.send(data.get("failed"))
-    #     if data["totalResults"] == 0:
-    #         return await ctx.send(
-    #             "No results found."
-    #         )
-    #     embeds = []
-    #     for i, article in enumerate(data["articles"][:15], 1):
-    #         embed = discord.Embed(
-    #             title=article["title"],
-    #             color=await self.bot.get_embed_color(ctx.channel),
-    #             description=f"[Click Here for Full Article]({article['url']})\n\n{article['description']}",
-    #             timestamp=datetime.datetime.fromisoformat(article["publishedAt"].replace("Z", "")),
-    #         )
-    #         embed.set_image(url=article["urlToImage"])
-    #         embed.set_author(name=f"{article['author']} - {article['source']['name']}")
-    #         embed.set_footer(text=f"Article {i}/{data['totalResults']}")
-    #         embeds.append(embed)
-    #     if len(embeds) == 1:
-    #         await ctx.send(embed=embeds[0])
-    #     else:
-    #         await menu(ctx, embeds, DEFAULT_CONTROLS, timeout=90)
+    @news.command()
+    async def topglobal(self, ctx, *, query: str):
+        """Top Headlines from around the world."""
+        async with ctx.typing():
+            data = await self.get(
+                self.api.format("top-headlines", "q={}".format(query), "", self.newsapikey, "")
+            )
+        if data.get("failed") is not None:
+            return await ctx.send(data.get("failed"))
+        if data["totalResults"] == 0:
+            return await ctx.send("No results found.")
+        await GenericMenu(source=ArticleFormat(data["articles"]), ctx=ctx,).start(
+            ctx=ctx,
+            wait=False,
+        )

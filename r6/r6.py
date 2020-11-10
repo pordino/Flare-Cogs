@@ -1,14 +1,14 @@
 import typing
+from io import BytesIO
 
-import json
 import discord
 import r6statsapi
 from redbot.core import Config, checks, commands
-from redbot.core.utils.chat_formatting import pagify, humanize_timedelta
+from redbot.core.utils.chat_formatting import humanize_timedelta
 from redbot.core.utils.menus import DEFAULT_CONTROLS, menu
 
+from .converters import REGIONS, PlatformConverter, RegionConverter
 from .stats import Stats
-from .converters import PlatformConverter, RegionConverter, REGIONS
 
 
 async def tokencheck(ctx):
@@ -17,7 +17,7 @@ async def tokencheck(ctx):
 
 
 class R6(commands.Cog):
-    """Rainbow6 Related Commands"""
+    """Rainbow6 Related Commands."""
 
     __version__ = "1.6.0"
 
@@ -36,6 +36,24 @@ class R6(commands.Cog):
         self.regions = {"Europe": "emea", "North America": "ncsa", "Asia": "apac"}
         self.foreignops = {"jager": "jäger", "nokk": "nøkk", "capitao": "capitão"}
         self.client = None
+
+    async def red_get_data_for_user(self, *, user_id: int):
+        data = await self.config.user_from_id(user_id).all()
+        contents = f"R6 Account for Discord user with ID {user_id}:\n- Name: {data['username']}\n- Platform: {data['platform']}\n- Name: {data['region']}\n"
+        return {"user_data.txt": BytesIO(contents.encode())}
+
+    async def red_delete_data_for_user(
+        self,
+        *,
+        requester: typing.Literal["discord_deleted_user", "owner", "user", "user_strict"],
+        user_id: int,
+    ):
+
+        await self.config.user_from_id(user_id).clear()
+        all_members = await self.config.all_members()
+        for guild_id, member_dict in all_members.items():
+            if user_id in member_dict:
+                await self.config.member_from_ids(guild_id, user_id).clear()
 
     async def initalize(self):
         token = await self.bot.get_shared_api_tokens("r6stats")
@@ -94,11 +112,10 @@ class R6(commands.Cog):
     @commands.check(tokencheck)
     @commands.group(autohelp=True)
     async def r6(self, ctx):
-        """Rainbow 6 Siege Statistics
-        
-        Valid consoles are psn, xbox and pc.
-        Valid regions are NA, EU and Asia"""
-        pass
+        """Rainbow 6 Siege Statistics.
+
+        Valid consoles are psn, xbox and pc. Valid regions are NA, EU and Asia
+        """
 
     @r6.command(name="set", aliases=["setprofile"])
     async def _set(self, ctx, region: RegionConverter, platform: PlatformConverter, *, name: str):
@@ -141,8 +158,9 @@ class R6(commands.Cog):
         platform: typing.Optional[PlatformConverter] = None,
     ):
         """General R6 Stats.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         if all(v is None for v in [profile, platform]):
             profile = await self.config.user(ctx.author).username()
             if profile is None:
@@ -187,8 +205,9 @@ class R6(commands.Cog):
         platform: typing.Optional[PlatformConverter] = None,
     ):
         """Casual R6 Stats.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         if all(v is None for v in [profile, platform]):
             profile = await self.config.user(ctx.author).username()
             if profile is None:
@@ -237,8 +256,9 @@ class R6(commands.Cog):
         platform: typing.Optional[PlatformConverter] = None,
     ):
         """Ranked R6 Stats.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         if all(v is None for v in [profile, platform]):
             profile = await self.config.user(ctx.author).username()
             if profile is None:
@@ -282,8 +302,9 @@ class R6(commands.Cog):
     @r6.command()
     async def operator(self, ctx, profile, operator: str, platform: PlatformConverter = None):
         """R6 Operator Stats.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
 
         if operator in self.foreignops:
             operator = self.foreignops[operator]
@@ -346,8 +367,9 @@ class R6(commands.Cog):
         region: typing.Optional[RegionConverter] = None,
     ):
         """R6 Seasonal Stats.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         if all(v is None for v in [profile, platform]):
             profile = await self.config.user(ctx.author).username()
             if profile is None:
@@ -419,8 +441,9 @@ class R6(commands.Cog):
 
         If you do not have any stats for an operator then it is ommited.
         Different stats include kills, deaths, kd, wins, losses, headshots, dbnos, meele_kills and playtime
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         stats = [
             "kills",
             "deaths",
@@ -515,8 +538,9 @@ class R6(commands.Cog):
         platform: typing.Optional[PlatformConverter] = None,
     ):
         """General R6 Stats.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         if all(v is None for v in [profile, platform]):
             profile = await self.config.user(ctx.author).username()
             if profile is None:
@@ -552,8 +576,9 @@ class R6(commands.Cog):
         platform: typing.Optional[PlatformConverter] = None,
     ):
         """R6 Weapon type statistics.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         if all(v is None for v in [profile, platform]):
             profile = await self.config.user(ctx.author).username()
             if profile is None:
@@ -591,8 +616,9 @@ class R6(commands.Cog):
         """R6 Weapon Statistics.
 
         If the weapon name has a space, please surround it with quotes.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         platform = platform or r6statsapi.Platform.uplay
         data = await self.request_data(ctx, "weapon", player=profile, platform=platform)
         if data is None:
@@ -627,8 +653,9 @@ class R6(commands.Cog):
         """R6 Leaderboard Statistics.
 
         Regions: all, eu, na, asia
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         region = region or r6statsapi.Regions.all
         if page < 1 or page > 50:
             return await ctx.send("Invalid page number, must be between 1 and 50.")
@@ -656,8 +683,9 @@ class R6(commands.Cog):
         self, ctx, profile: typing.Optional[str], platform: PlatformConverter = None
     ):
         """R6 Gamemode Statistics.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         if all(v is None for v in [profile, platform]):
             profile = await self.config.user(ctx.author).username()
             if profile is None:
@@ -693,8 +721,9 @@ class R6(commands.Cog):
     @r6.command()
     async def queue(self, ctx, profile: typing.Optional[str], platform: PlatformConverter = None):
         """R6 stats from casual, ranked & other together.
-        
-        Valid platforms are psn, xbl and uplay."""
+
+        Valid platforms are psn, xbl and uplay.
+        """
         if all(v is None for v in [profile, platform]):
             profile = await self.config.user(ctx.author).username()
             if profile is None:
@@ -733,7 +762,8 @@ class R6(commands.Cog):
     async def setpicture(self, ctx, toggle: bool = True):
         """Set wheter to recieve an embed or a picture.
 
-        Toggle must be a valid bool."""
+        Toggle must be a valid bool.
+        """
         await self.config.member(ctx.author).picture.set(toggle)
         if toggle:
             await ctx.send("Your stat messages will now be sent as a picture.")

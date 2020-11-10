@@ -1,13 +1,12 @@
 import discord
-from redbot.core import commands, Config
+from redbot.core import Config, commands
 from redbot.core.utils.common_filters import INVITE_URL_RE
-import re
 
 
 class DmInvite(commands.Cog):
-    """Respond to invites send in DMs"""
+    """Respond to invites send in DMs."""
 
-    __version__ = "0.0.3"
+    __version__ = "0.0.4"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
@@ -23,6 +22,14 @@ class DmInvite(commands.Cog):
             embed=False,
         )
 
+    async def red_get_data_for_user(self, *, user_id: int):
+        # this cog does not story any data
+        return {}
+
+    async def red_delete_data_for_user(self, *, requester, user_id: int) -> None:
+        # this cog does not story any data
+        pass
+
     async def invite_url(self):
         app_info = await self.bot.application_info()
         perms = await self.bot._config.invite_perm()
@@ -32,27 +39,28 @@ class DmInvite(commands.Cog):
     @commands.group()
     @commands.is_owner()
     async def dminvite(self, ctx):
-        """Group Commands for DM Invites"""
-        pass
+        """Group Commands for DM Invites."""
 
     @dminvite.command()
     @commands.is_owner()
     async def settings(self, ctx):
-        """DM Invite Settings"""
+        """DM Invite Settings."""
         embed = discord.Embed(title="DM Invite Settings", color=discord.Color.red())
         embed.add_field(
             name="Tracking Invites", value="Yes" if await self.config.toggle() else "No"
         )
         embed.add_field(name="Embeds", value="Yes" if await self.config.embed() else "No")
-        embed.add_field(name="Message", value=await self.config.message())
+        msg = await self.config.message()
+        embed.add_field(name="Message", value=msg)
         embed.add_field(name="Permissions Value", value=await self.bot._config.invite_perm())
-        embed.add_field(name="Link", value=f"[Click Here]({await self.invite_url()})")
+        if "{link}" in msg:
+            embed.add_field(name="Link", value=f"[Click Here]({await self.invite_url()})")
         await ctx.send(embed=embed)
 
     @dminvite.command()
     @commands.is_owner()
     async def toggle(self, ctx, toggle: bool = None):
-        """Turn DM responding on/off"""
+        """Turn DM responding on/off."""
         toggle = toggle or await self.config.toggle()
         if toggle:
             await self.config.toggle.set(False)
@@ -80,9 +88,11 @@ class DmInvite(commands.Cog):
     @dminvite.command()
     @commands.is_owner()
     async def message(self, ctx, *, message: str):
-        """Set the message that the bot will respond with. The message must contain {link}."""
-        if "{link}" not in message:
-            return await ctx.send("The message must contain `{link}`.")
+        """Set the message that the bot will respond with.
+
+        **Available Parameters**:
+        {link} - return the bots oauth url with the permissions you've set with the core inviteset.
+        """
         await self.config.message.set(message)
         await ctx.tick()
 
@@ -96,11 +106,10 @@ class DmInvite(commands.Cog):
             link_res = INVITE_URL_RE.findall(message.content)
             if link_res:
                 msg = await self.config.message()
+                if "{link}" in msg:
+                    msg = msg.format(link=await self.invite_url())
                 if await self.config.embed():
-                    embed = discord.Embed(
-                        color=discord.Color.red(),
-                        description=msg.format(link=await self.invite_url()),
-                    )
+                    embed = discord.Embed(color=discord.Color.red(), description=msg)
                     await message.author.send(embed=embed)
                     return
-                await message.author.send(msg.format(link=await self.invite_url()))
+                await message.author.send(msg)

@@ -3,16 +3,16 @@ import typing
 
 import aiohttp
 import discord
-import validators
 from redbot.core import commands
 from redbot.core.utils.chat_formatting import humanize_number
-from redbot.core.utils.menus import DEFAULT_CONTROLS, menu
+
+from .menus import ArticleFormat, CovidMenu, CovidStateMenu, GenericMenu
 
 
 class Covid(commands.Cog):
     """Covid-19 (Novel Coronavirus Stats)."""
 
-    __version__ = "0.1.0"
+    __version__ = "0.3.0"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
@@ -21,10 +21,18 @@ class Covid(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.api = "https://corona.lmao.ninja/"
+        self.api = "https://disease.sh/v3/covid-19"
         self.newsapi = "https://newsapi.org/v2/top-headlines?q=COVID&sortBy=publishedAt&pageSize=100&country={}&apiKey={}&page=1"
-        self.session = aiohttp.ClientSession(loop=self.bot.loop)
+        self.session = aiohttp.ClientSession()
         self.newsapikey = None
+
+    async def red_get_data_for_user(self, *, user_id: int):
+        # this cog does not story any data
+        return {}
+
+    async def red_delete_data_for_user(self, *, requester, user_id: int) -> None:
+        # this cog does not story any data
+        pass
 
     async def initalize(self):
         token = await self.bot.get_shared_api_tokens("newsapi")
@@ -61,7 +69,7 @@ class Covid(commands.Cog):
 
     @commands.command(hidden=True)
     async def covidcountries(self, ctx):
-        """Countries supported by covidnews"""
+        """Countries supported by covidnews."""
         await ctx.send(
             "Valid country codes are:\nae ar at au be bg br ca ch cn co cu cz de eg fr gb gr hk hu id ie il in it jp kr lt lv ma mx my ng nl no nz ph pl pt ro rs ru sa se sg si sk th tr tw ua us ve za"
         )
@@ -69,7 +77,7 @@ class Covid(commands.Cog):
     @commands.command()
     async def covidnews(self, ctx, countrycode: str):
         """Covid News from a Country - County must be 2-letter ISO 3166-1 code.
-        
+
         Check [p]covidcountries for a list of all possible country codes supported."""
         async with ctx.typing():
             data = await self.get(self.newsapi.format(countrycode, self.newsapikey))
@@ -81,25 +89,13 @@ class Covid(commands.Cog):
                     ctx.prefix
                 )
             )
-        embeds = []
-        for i, article in enumerate(data["articles"], 1):
-            embed = discord.Embed(
-                title=article["title"],
-                color=await self.bot.get_embed_color(ctx.channel),
-                description=f"[Click Here for Full Article]({article['url']})\n\n{article['description']}",
-                timestamp=datetime.datetime.fromisoformat(article["publishedAt"].replace("Z", "")),
-            )
-            if validators.url(article["urlToImage"]):
-                embed.set_image(url=article["urlToImage"])
-            embed.set_author(name=f"{article['author']} - {article['source']['name']}")
-            embed.set_footer(text=f"Article {i}/{data['totalResults']}")
-            embeds.append(embed)
-        if len(embeds) == 1:
-            await ctx.send(embed=embeds[0])
-        else:
-            await menu(ctx, embeds, DEFAULT_CONTROLS, timeout=90)
+        await GenericMenu(source=ArticleFormat(data["articles"]), ctx=ctx,).start(
+            ctx=ctx,
+            wait=False,
+        )
 
     @commands.command()
+    @commands.is_owner()
     async def covidsetup(self, ctx):
         """Instructions on how to setup covid related APIs."""
         msg = "**Covid News API Setup**\n**1**. Visit https://newsapi.org and register for an API.\n**2**. Use the following command: {}set api newsapi key <api_key_here>\n**3**. Reload the cog if it doesnt work immediately.".format(
@@ -109,10 +105,14 @@ class Covid(commands.Cog):
 
     @commands.group(invoke_without_command=True)
     async def covid(self, ctx, *, country: typing.Optional[str]):
-        """Stats about Covid-19."""
+        """Stats about Covid-19 or countries if provided.
+
+        Supports multiple countries seperated by a comma.
+        Example: [p]covid Ireland, England
+        """
         if not country:
             async with ctx.typing():
-                data = await self.get(self.api + "v2/all")
+                data = await self.get(self.api + "/all")
             if isinstance(data, dict):
                 if data.get("failed") is not None:
                     return await ctx.send(data.get("failed"))
@@ -133,66 +133,50 @@ class Covid(commands.Cog):
             )
             embed.add_field(name="Cases Today", value=humanize_number(data["todayCases"]))
             embed.add_field(name="Deaths Today", value=humanize_number(data["todayDeaths"]))
+            embed.add_field(name="Recovered Today", value=humanize_number(data["todayRecovered"]))
             embed.add_field(name="Total Tests", value=humanize_number(data["tests"]))
             await ctx.send(embed=embed)
         else:
             async with ctx.typing():
-                data = await self.get(self.api + "v2/countries/{}".format(country))
-            error = data.get("failed")
-            if error is not None:
-                return await ctx.send(error)
+                data = await self.get(self.api + "/countries/{}".format(country))
+            if isinstance(data, dict):
+                error = data.get("failed")
+                if error is not None:
+                    return await ctx.send(error)
+                data = [data]
             if not data:
                 return await ctx.send("No data available.")
-            embed = discord.Embed(
-                color=await self.bot.get_embed_color(ctx.channel),
-                title="Covid-19 | {} Statistics".format(data["country"]),
-                timestamp=datetime.datetime.utcfromtimestamp(data["updated"] / 1000),
+            await GenericMenu(source=CovidMenu(data), ctx=ctx, type="Today").start(
+                ctx=ctx,
+                wait=False,
             )
-            embed.set_thumbnail(url=data["countryInfo"]["flag"])
-            embed.add_field(name="Cases", value=humanize_number(data["cases"]))
-            embed.add_field(name="Deaths", value=humanize_number(data["deaths"]))
-            embed.add_field(name="Recovered", value=humanize_number(data["recovered"]))
-            embed.add_field(name="Cases Today", value=humanize_number(data["todayCases"]))
-            embed.add_field(name="Deaths Today", value=humanize_number(data["todayDeaths"]))
-            embed.add_field(name="Critical", value=humanize_number(data["critical"]))
-            embed.add_field(name="Active", value=humanize_number(data["active"]))
-            embed.add_field(name="Total Tests", value=humanize_number(data["tests"]))
-            embed.add_field(name="\u200b", value="\u200b")
-            await ctx.send(embed=embed)
 
     @covid.command()
     async def yesterday(self, ctx, *, country: str):
-        """Show the statistics from yesterday for a country"""
+        """Show the statistics from yesterday for countries.
+
+        Supports multiple countries seperated by a comma.
+        Example: [p]covid yesterday Ireland, England
+        """
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries/{}?yesterday=1".format(country))
-            error = data.get("failed")
-            if error is not None:
-                return await ctx.send(error)
+            data = await self.get(self.api + "/countries/{}?yesterday=1".format(country))
+            if isinstance(data, dict):
+                error = data.get("failed")
+                if error is not None:
+                    return await ctx.send(error)
+                data = [data]
             if not data:
                 return await ctx.send("No data available.")
-            embed = discord.Embed(
-                color=await self.bot.get_embed_color(ctx.channel),
-                title="Covid-19 | Yesterday | {} Statistics".format(data["country"]),
-                timestamp=datetime.datetime.utcfromtimestamp(data["updated"] / 1000),
-                description="Stats are from **YESTERDAY**.",
+            await GenericMenu(source=CovidMenu(data), ctx=ctx, type="Yesterday").start(
+                ctx=ctx,
+                wait=False,
             )
-            embed.set_thumbnail(url=data["countryInfo"]["flag"])
-            embed.add_field(name="Cases", value=humanize_number(data["cases"]))
-            embed.add_field(name="Deaths", value=humanize_number(data["deaths"]))
-            embed.add_field(name="Recovered", value=humanize_number(data["recovered"]))
-            embed.add_field(name="Cases Yesterday", value=humanize_number(data["todayCases"]))
-            embed.add_field(name="Deaths Yesterday", value=humanize_number(data["todayDeaths"]))
-            embed.add_field(name="Critical", value=humanize_number(data["critical"]))
-            embed.add_field(name="Active", value=humanize_number(data["active"]))
-            embed.add_field(name="Total Tests", value=humanize_number(data["tests"]))
-            embed.add_field(name="\u200b", value="\u200b")
-            await ctx.send(embed=embed)
 
     @covid.command()
     async def todaycases(self, ctx):
-        """Show the highest cases from countrys today"""
+        """Show the highest cases from countrys today."""
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries?sort=todayCases")
+            data = await self.get(self.api + "/countries?sort=todayCases")
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
@@ -214,9 +198,9 @@ class Covid(commands.Cog):
 
     @covid.command()
     async def todaydeaths(self, ctx):
-        """Show the highest deaths from countrys today"""
+        """Show the highest deaths from countrys today."""
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries?sort=todayDeaths")
+            data = await self.get(self.api + "/countries?sort=todayDeaths")
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
@@ -238,9 +222,9 @@ class Covid(commands.Cog):
 
     @covid.command()
     async def highestcases(self, ctx):
-        """Show the highest cases from countrys overall"""
+        """Show the highest cases from countrys overall."""
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries?sort=cases")
+            data = await self.get(self.api + "/countries?sort=cases")
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
@@ -262,9 +246,9 @@ class Covid(commands.Cog):
 
     @covid.command()
     async def highestdeaths(self, ctx):
-        """Show the highest deaths from countrys overall"""
+        """Show the highest deaths from countrys overall."""
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries?sort=deaths")
+            data = await self.get(self.api + "/countries?sort=deaths")
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
@@ -286,11 +270,14 @@ class Covid(commands.Cog):
 
     @covid.command()
     async def topcases(self, ctx, amount: int = 6):
-        """Show X countries with top amount of cases. Defaults to 6."""
+        """Show X countries with top amount of cases.
+
+        Defaults to 6.
+        """
         if amount > 20 or amount < 0:
             return await ctx.send("Invalid amount. Please choose between an amount between 1-20.")
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries?sort=cases")
+            data = await self.get(self.api + "/countries?sort=cases")
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
@@ -309,11 +296,14 @@ class Covid(commands.Cog):
 
     @covid.command()
     async def topcasestoday(self, ctx, amount: int = 6):
-        """Show X countries with top amount of cases today. Defaults to 6."""
+        """Show X countries with top amount of cases today.
+
+        Defaults to 6.
+        """
         if amount > 20 or amount < 0:
             return await ctx.send("Invalid amount. Please choose between an amount between 1-20.")
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries?sort=todayCases")
+            data = await self.get(self.api + "/countries?sort=todayCases")
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
@@ -332,11 +322,14 @@ class Covid(commands.Cog):
 
     @covid.command()
     async def topdeaths(self, ctx, amount: int = 6):
-        """Show X countries with top amount of deaths. Defaults to 6."""
+        """Show X countries with top amount of deaths.
+
+        Defaults to 6.
+        """
         if amount > 20 or amount < 0:
             return await ctx.send("Invalid amount. Please choose between an amount between 1-20.")
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries?sort=deaths")
+            data = await self.get(self.api + "/countries?sort=deaths")
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
@@ -355,11 +348,14 @@ class Covid(commands.Cog):
 
     @covid.command()
     async def topdeathstoday(self, ctx, amount: int = 6):
-        """Show X countries with top amount of deaths today. Defaults to 6."""
+        """Show X countries with top amount of deaths today.
+
+        Defaults to 6.
+        """
         if amount > 20 or amount < 0:
             return await ctx.send("Invalid amount. Please choose between an amount between 1-20.")
         async with ctx.typing():
-            data = await self.get(self.api + "v2/countries?sort=todayDeaths")
+            data = await self.get(self.api + "/countries?sort=todayDeaths")
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
@@ -376,25 +372,48 @@ class Covid(commands.Cog):
                 embed.add_field(name=data[i]["country"], value=msg)
             await ctx.send(embed=embed)
 
-    @covid.command()
-    async def state(self, ctx, *, state: str):
-        """Show stats for a specific state."""
+    @covid.group(invoke_without_command=True)
+    async def state(self, ctx, *, states: str):
+        """Show stats for specific states.
+
+        Supports multiple countries seperated by a comma.
+        Example: [p]covid state New York, California
+        """
+        if not states:
+            return await ctx.send_help()
         async with ctx.typing():
-            data = await self.get(self.api + "v2/states/{}".format(state))
+            states = ",".join(states.split(", "))
+            data = await self.get(self.api + "/states/{}".format(states))
             if isinstance(data, dict):
                 error = data.get("failed")
                 if error is not None:
                     return await ctx.send(error)
+                data = [data]
             if not data:
                 return await ctx.send("No data available.")
-            embed = discord.Embed(
-                color=await self.bot.get_embed_color(ctx.channel),
-                title="Covid-19 | USA | {} Statistics".format(data["state"]),
+            await GenericMenu(source=CovidStateMenu(data), ctx=ctx, type="Today").start(
+                ctx=ctx,
+                wait=False,
             )
-            embed.add_field(name="Cases", value=humanize_number(data["cases"]))
-            embed.add_field(name="Deaths", value=humanize_number(data["deaths"]))
-            embed.add_field(name="Cases Today", value=humanize_number(data["todayCases"]))
-            embed.add_field(name="Deaths Today", value=humanize_number(data["todayDeaths"]))
-            embed.add_field(name="Active Cases", value=humanize_number(data["active"]))
-            embed.add_field(name="Total Tests", value=humanize_number(data["tests"]))
-            await ctx.send(embed=embed)
+
+    @state.command(name="yesterday")
+    async def _yesterday(self, ctx, *, states: str):
+        """Show stats for yesterday for specific states.
+
+        Supports multiple countries seperated by a comma.
+        Example: [p]covid state yesterday New York, California.
+        """
+        async with ctx.typing():
+            states = ",".join(states.split(", "))
+            data = await self.get(self.api + "/states/{}?yesterday=1".format(states))
+            if isinstance(data, dict):
+                error = data.get("failed")
+                if error is not None:
+                    return await ctx.send(error)
+                data = [data]
+            if not data:
+                return await ctx.send("No data available.")
+            await GenericMenu(source=CovidStateMenu(data), ctx=ctx, type="Yesterday").start(
+                ctx=ctx,
+                wait=False,
+            )

@@ -1,5 +1,6 @@
-import typing
 from datetime import datetime
+from io import BytesIO
+from typing import Literal
 
 import aiohttp
 import discord
@@ -7,7 +8,8 @@ from redbot.core import Config, commands
 from redbot.core.utils.chat_formatting import humanize_timedelta
 from redbot.core.utils.menus import DEFAULT_CONTROLS, close_menu, menu, next_page, prev_page
 
-from .funcs import account_matches, account_stats, match_info
+from .converters import StrUser
+from .funcs import account_matches, account_ongoing, account_stats, match_info
 
 
 async def tokencheck(ctx):
@@ -25,13 +27,21 @@ controls = {
 profile_controls = {
     "\N{SPORTS MEDAL}": account_stats,
     "\N{CROSSED SWORDS}\N{VARIATION SELECTOR-16}": account_matches,
+    "❌": close_menu,
+}
+
+profile_controls_ongoing = {
+    "\N{SPORTS MEDAL}": account_stats,
+    "\N{CROSSED SWORDS}\N{VARIATION SELECTOR-16}": account_matches,
+    "\N{VIDEO GAME}": account_ongoing,
+    "❌": close_menu,
 }
 
 
 class Faceit(commands.Cog):
-    """CS:GO Faceit Statistics"""
+    """CS:GO Faceit Statistics."""
 
-    __version__ = "0.0.5"
+    __version__ = "0.0.9"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
@@ -41,10 +51,26 @@ class Faceit(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.api = "https://open.faceit.com/data/v4"
-        self._session = aiohttp.ClientSession(loop=self.bot.loop)
+        self._session = aiohttp.ClientSession()
         self.config = Config.get_conf(self, 95932766180343808, force_registration=True)
         self.config.register_user(name=None)
         self.token = None
+
+    async def red_get_data_for_user(self, *, user_id: int):
+        name = await self.config.user_from_id(user_id).name()
+        if name is None:
+            return {}
+        contents = f"Faceit Account for Discord user with ID {user_id}:\n- Name: {name}\n"
+        return {"user_data.txt": BytesIO(contents.encode())}
+
+    async def red_delete_data_for_user(
+        self,
+        *,
+        requester: Literal["discord_deleted_user", "owner", "user", "user_strict"],
+        user_id: int,
+    ):
+
+        await self.config.user_from_id(user_id).clear()
 
     def cog_unload(self):
         self.bot.loop.create_task(self._session.close())
@@ -56,6 +82,16 @@ class Faceit(commands.Cog):
     async def get(self, url):
         async with self._session.get(
             self.api + url, headers={"authorization": "bearer {}".format(self.token)}
+        ) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            if resp.status == 401:
+                return {"error": "Authorization Failed - API Key may be invalid."}
+            return await resp.json()
+
+    async def get_ongoing(self, _id):
+        async with self._session.get(
+            "https://api.faceit.com/match/v1/matches/groupByState?userId=" + _id
         ) as resp:
             if resp.status == 200:
                 return await resp.json()
@@ -77,6 +113,28 @@ class Faceit(commands.Cog):
         if service_name == "faceit":
             self.token = api_tokens.get("authorization")
 
+    async def get_user(self, ctx, user):
+        if user is None:
+            name = await self.config.user(ctx.author).name()
+            if name is None:
+                await ctx.send(
+                    "You don't have a valid account linked, check {}faceit set.".format(ctx.prefix)
+                )
+                return False
+        elif isinstance(user, discord.User):
+            name = await self.config.user(user).name()
+            if name is None:
+                name = await self.get_userid(user.name)
+                if isinstance(name, dict):
+                    await ctx.send(name["failed"])
+                    return False
+        else:
+            name = await self.get_userid(user)
+            if isinstance(name, dict):
+                await ctx.send(name["failed"])
+                return False
+        return name
+
     @commands.is_owner()
     @commands.command()
     async def faceitset(self, ctx):
@@ -95,12 +153,14 @@ class Faceit(commands.Cog):
     @commands.group()
     @commands.check(tokencheck)
     async def faceit(self, ctx):
-        """Faceit Commands"""
-        pass
+        """Faceit Commands."""
 
     @faceit.command(name="set")
-    async def _set(self, ctx, *, name: str):
-        """Set your faceit username"""
+    async def _set(self, ctx, *, name: str = None):
+        """Set your faceit username."""
+        if name is None:
+            await self.config.user(ctx.author).name.set(name)
+            await ctx.send("Your account link has been reset.")
         uname = await self.get_userid(name)
         if isinstance(uname, dict):
             await ctx.send(uname["failed"])
@@ -111,34 +171,25 @@ class Faceit(commands.Cog):
         await self.config.user(ctx.author).name.set(uname)
 
     @faceit.command()
-    async def profile(self, ctx, *, user: typing.Union[discord.User, str] = None):
-        """Faceit Profile Stats"""
-        if user is None:
-            name = await self.config.user(ctx.author).name()
-            if name is None:
-                return await ctx.send(
-                    "You don't have a valid account linked, check {}faceit set.".format(ctx.prefix)
-                )
-        elif isinstance(user, discord.User):
-            name = await self.config.user(user).name()
-            if name is None:
-                name = await self.get_userid(user)
-        else:
-            name = await self.get_userid(user)
-            if isinstance(name, dict):
-                await ctx.send(name["failed"])
-                return
+    async def profile(self, ctx, *, user: StrUser = None):
+        """Faceit Profile Stats."""
+        name = await self.get_user(ctx, user)
+        if name is False:
+            return
         profilestats = await self.get("/players/{}".format(name))
         if profilestats.get("error"):
             return await ctx.send(profilestats.get("error"))
         if profilestats.get("errors"):
             return await ctx.send(profilestats.get("errors")[0]["message"])
+        ongoing = await self.is_ongoing(ctx, name, False)
+        msg = "\nPress the \N{SPORTS MEDAL} button for the first game statistics.\nPress the \N{CROSSED SWORDS}\N{VARIATION SELECTOR-16} button for the most recent matches."
+        if ongoing:
+            msg += "\nPress the \N{VIDEO GAME}\N{VARIATION SELECTOR-16} button for information about the current ongoing match"
         embed = discord.Embed(
             color=ctx.author.color,
             title="Faceit Profile for {}".format(profilestats["nickname"]),
-            description="[Profile Link - Click Here]({})\n\nPress the \N{SPORTS MEDAL} button for your first game statistics.\nPress the \N{CROSSED SWORDS}\N{VARIATION SELECTOR-16} button for your most recent matches.".format(
-                profilestats["faceit_url"].format(lang=profilestats["settings"]["language"])
-            ),
+            description=msg,
+            url=profilestats["faceit_url"].format(lang=profilestats["settings"]["language"]),
         )
         embed.set_thumbnail(url=profilestats["avatar"])
         accinfo = f"**Nickname**: {profilestats['nickname']}\n**Membership**: {profilestats['membership_type'].title()}"
@@ -154,26 +205,17 @@ class Faceit(commands.Cog):
                 name=game.title(),
                 value=f"**Region**: {profilestats['games'][game]['region']}\n**Skill Level**: {profilestats['games'][game]['skill_level']}\n**ELO**: {profilestats['games'][game]['faceit_elo']}",
             )
-        await menu(ctx, [embed], profile_controls, timeout=30)
+        embed.set_author(name=profilestats["nickname"], icon_url=profilestats["avatar"])
+        await menu(
+            ctx, [embed], profile_controls if not ongoing else profile_controls_ongoing, timeout=30
+        )
 
     @faceit.command()
-    async def matches(self, ctx, *, user: typing.Union[discord.User, str] = None):
-        """Faceit Match Stats"""
-        if user is None:
-            name = await self.config.user(ctx.author).name()
-            if name is None:
-                return await ctx.send(
-                    "You don't have a valid account linked, check {}faceit set.".format(ctx.prefix)
-                )
-        elif isinstance(user, discord.User):
-            name = await self.config.user(user).name()
-            if name is None:
-                name = await self.get_userid(user)
-        else:
-            name = await self.get_userid(user)
-            if isinstance(name, dict):
-                await ctx.send(name["failed"])
-                return
+    async def matches(self, ctx, *, user: StrUser = None):
+        """Faceit Match Stats."""
+        name = await self.get_user(ctx, user)
+        if name is False:
+            return
         profilestats = await self.get("/players/{}/history".format(name))
         if profilestats.get("error"):
             return await ctx.send(profilestats.get("error"))
@@ -203,11 +245,14 @@ class Faceit(commands.Cog):
                 embed.add_field(name=f"{teams[team]} Players", value="\n".join(players))
 
             embeds.append(embed)
-        await menu(ctx, embeds, controls, timeout=30)
+        if embeds:
+            await menu(ctx, embeds, controls, timeout=30)
+        else:
+            await ctx.send("No information for previous matches found.")
 
     @faceit.command()
     async def match(self, ctx, match_id):
-        """In-depth stats for a match"""
+        """In-depth stats for a match."""
         match = await self.get("/matches/{}/stats".format(match_id))
         if match.get("error"):
             return await ctx.send(match.get("error"))
@@ -248,26 +293,17 @@ class Faceit(commands.Cog):
             embed.add_field(name="\u200b", value="\u200b")
             embed.set_footer(text=f"Page {i}/3")
             embeds.append(embed)
-        await menu(ctx, embeds, DEFAULT_CONTROLS, timeout=60)
+        if embeds:
+            await menu(ctx, embeds, DEFAULT_CONTROLS, timeout=60)
+        else:
+            await ctx.send("No information for match found.")
 
     @faceit.command()
-    async def stats(self, ctx, game, *, user: typing.Union[discord.User, str] = None):
+    async def stats(self, ctx, game, *, user: StrUser = None):
         """In-depth stats for any faceit supported game."""
-        if user is None:
-            name = await self.config.user(ctx.author).name()
-            if name is None:
-                return await ctx.send(
-                    "You don't have a valid account linked, check {}faceit set.".format(ctx.prefix)
-                )
-        elif isinstance(user, discord.User):
-            name = await self.config.user(user).name()
-            if name is None:
-                name = await self.get_userid(user)
-        else:
-            name = await self.get_userid(user)
-            if isinstance(name, dict):
-                await ctx.send(name["failed"])
-                return
+        name = await self.get_user(ctx, user)
+        if name is False:
+            return
         stats = await self.get("/players/{}/stats/{}".format(name, game))
         if stats.get("error"):
             return await ctx.send(stats.get("error"))
@@ -298,4 +334,51 @@ class Faceit(commands.Cog):
             embed.set_thumbnail(url=segment["img_regular"])
             embed.set_footer(text=f"Page {i}/{len(stats['segments']) + 1}")
             embeds.append(embed)
-        await menu(ctx, embeds, DEFAULT_CONTROLS, timeout=30)
+        if embeds:
+            await menu(ctx, embeds, DEFAULT_CONTROLS, timeout=30)
+        else:
+            await ctx.send("No information found.")
+
+    @faceit.command()
+    async def ongoing(self, ctx, *, user: StrUser = None):
+        """Check if a user has an ongoing game."""
+        name = await self.get_user(ctx, user)
+        if name is False:
+            return
+        ongoing = await self.is_ongoing(ctx, name)
+        if ongoing is False:
+            return
+        ongoing = ongoing[0]
+        team1, team2 = ongoing["teams"]["faction1"], ongoing["teams"]["faction2"]
+        embed = discord.Embed(
+            title=f"{team1['name']} vs {team2['name']}",
+            timestamp=datetime.strptime(ongoing["createdAt"], "%Y-%m-%dT%H:%M:%S%z"),
+        )
+        embed.set_author(name=f"Ongoing {ongoing['entity']['name']}")
+        embed.set_footer(text="Started:")
+        embed.add_field(
+            name=f"{team1['name']} Roster",
+            value="\n".join([player["nickname"] for player in team1["roster"]]),
+        )
+        embed.add_field(
+            name=f"{team2['name']} Roster",
+            value="\n".join([player["nickname"] for player in team2["roster"]]),
+        )
+        await ctx.send(embed=embed)
+
+    async def is_ongoing(self, ctx, name, messages=True):
+        stats = await self.get_ongoing(name)
+        if stats.get("error"):
+            if messages:
+                await ctx.send(stats.get("error"))
+            return False
+        if stats.get("errors"):
+            if messages:
+                await ctx.send(stats.get("errors")[0]["message"])
+            return False
+        ongoing = stats["payload"].get("ONGOING")
+        if ongoing is None:
+            if messages:
+                await ctx.send("No ongoing game available.")
+            return False
+        return ongoing
