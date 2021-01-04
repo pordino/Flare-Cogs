@@ -8,9 +8,16 @@ import discord
 import tabulate
 from redbot.core import Config, commands
 from redbot.core.utils.chat_formatting import box, humanize_list, inline
+from redbot.core.utils.menus import DEFAULT_CONTROLS, menu
 from redbot.core.utils.predicates import MessagePredicate
 
 logger = logging.getLogger("red.flare.highlight")
+
+
+def chunks(l, n):
+    """Yield successive n-sized chunks from l."""
+    for i in range(0, len(l), n):
+        yield l[i : i + n]
 
 
 class Highlight(commands.Cog):
@@ -55,7 +62,7 @@ class Highlight(commands.Cog):
                 del highlight[str(user_id)]
         await self.generate_cache()
 
-    __version__ = "1.4.1"
+    __version__ = "1.4.2"
 
     def format_help_for_context(self, ctx):
         """Thanks Sinbad."""
@@ -233,7 +240,7 @@ class Highlight(commands.Cog):
             failed = []
             for word in text:
                 if word.lower() in highlight[f"{ctx.author.id}"]:
-                    del highlight[f"{ctx.author.id}"][word]
+                    del highlight[f"{ctx.author.id}"][word.lower()]
                     passed.append(word)
                 else:
                     failed.append(word)
@@ -376,19 +383,24 @@ class Highlight(commands.Cog):
                 ]
                 for word in highlight[f"{ctx.author.id}"]
             ]
-            embed = discord.Embed(
-                title=f"Current highlighted text for {ctx.author.display_name} in {channel}:",
-                colour=ctx.author.colour,
-                description=box(
-                    tabulate.tabulate(
-                        sorted(words, key=lambda x: x[1], reverse=True),
-                        headers=["Word", "Toggle", "Ignoring Bots", "Word Boundaries"],
+            ems = []
+            for page in chunks(words, 10):
+                embed = discord.Embed(
+                    title=f"Current highlighted text for {ctx.author.display_name} in {channel}:",
+                    colour=ctx.author.colour,
+                    description=box(
+                        tabulate.tabulate(
+                            sorted(page, key=lambda x: x[1], reverse=True),
+                            headers=["Word", "Toggle", "Ignoring Bots", "Word Boundaries"],
+                        ),
+                        lang="prolog",
                     ),
-                    lang="prolog",
-                ),
-            )
-
-            await ctx.send(embed=embed)
+                )
+                ems.append(embed)
+            if len(ems) == 1:
+                await ctx.send(embed=ems[0])
+            else:
+                await menu(ctx, ems, DEFAULT_CONTROLS)
         else:
             await ctx.send(f"You currently do not have any highlighted words set up in {channel}.")
 
