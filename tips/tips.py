@@ -75,7 +75,7 @@ class Tips(commands.Cog):
         """
         Toggle and setup tips.
 
-        Run `[prefix]tips off` to disable tips.
+        Run `[p]tips off` to disable tips.
         """
         await self.config.user(ctx.author).toggle.set(toggle)
         await ctx.tick()
@@ -101,7 +101,7 @@ class Tips(commands.Cog):
         """
         Add a tip message.
 
-        Append {prefix} to have it formatted with prefix on send.
+        Append `{prefix}` to have it formatted with prefix on send.
         """
         async with self.config.tips() as replies:
             if tip in replies:
@@ -136,11 +136,16 @@ class Tips(commands.Cog):
                 return await ctx.send("No tips have been configured.")
             a = chunks(replies, 10)
             embeds = []
+            i = 0
             for item in a:
                 items = []
-                for i, strings in enumerate(item):
+                for strings in item:
                     items.append(f"**Reply {i}**: {strings}")
-                embed = discord.Embed(colour=discord.Color.red(), description="\n".join(items))
+                    i += 1
+                embed = discord.Embed(
+                    colour=await self.bot.get_embed_colour(ctx.channel),
+                    description="\n".join(items),
+                )
                 embeds.append(embed)
             if len(embeds) == 1:
                 await ctx.send(embed=embeds[0])

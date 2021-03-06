@@ -59,11 +59,33 @@ COLUMNS = [
     [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36],
 ]
 
+BET_TYPES = {
+    "red": "color",
+    "black": "color",
+    "1st dozen": "dozen",
+    "2nd dozen": "dozen",
+    "3rd dozen": "dozen",
+    "odd": "odd_or_even",
+    "even": "odd_or_even",
+    "1st half": "halfs",
+    "2nd half": "halfs",
+    "1st column": "column",
+    "2nd column": "column",
+    "3rd column": "column",
+}
+
 
 class Roulette(MixinMeta):
     """Roulette Game."""
 
     async def betting(self, ctx, bet, _type):
+        try:
+            if not await self.walletdisabledcheck(ctx):
+                await self.walletwithdraw(ctx.author, bet)
+            else:
+                await bank.withdraw_credits(ctx.author, bet)
+        except ValueError:
+            return {"failed": "You do not have enough funds to complete this bet."}
         try:
             _type = int(_type)
         except ValueError:
@@ -72,49 +94,42 @@ class Roulette(MixinMeta):
             if _type < 0 or _type > 36:
                 return {"failed": "Bet must be between 0 and 36."}
             if _type == 0:
+                for bet in self.roulettegames[ctx.guild.id]["zero"]:
+                    if bet.get(_type, False):
+                        if bet[_type]["user"] == ctx.author.id:
+                            return {"failed": "You cannot make duplicate bets."}
                 self.roulettegames[ctx.guild.id]["zero"].append(
                     {_type: {"user": ctx.author.id, "amount": bet}}
                 )
                 return {"sucess": 200}
+            for bet in self.roulettegames[ctx.guild.id]["number"]:
+                if bet.get(_type, False):
+                    if bet[_type]["user"] == ctx.author.id:
+                        return {"failed": "You cannot make duplicate bets."}
             self.roulettegames[ctx.guild.id]["number"].append(
                 {_type: {"user": ctx.author.id, "amount": bet}}
             )
             return {"sucess": 200}
-        if _type.lower() in ["red", "black"]:
-            self.roulettegames[ctx.guild.id]["color"].append(
+        if _type.lower() in BET_TYPES:
+            for better in self.roulettegames[ctx.guild.id][BET_TYPES[_type.lower()]]:
+                if better.get(_type.lower(), False):
+                    if better[_type.lower()]["user"] == ctx.author.id:
+                        return {"failed": "You cannot make duplicate bets."}
+            self.roulettegames[ctx.guild.id][BET_TYPES[_type.lower()]].append(
                 {_type.lower(): {"user": ctx.author.id, "amount": bet}}
             )
             return {"sucess": 200}
-        if _type.lower() in ["1st dozen", "2nd dozen", "3rd dozen"]:
-            self.roulettegames[ctx.guild.id]["dozen"].append(
-                {_type.lower(): {"user": ctx.author.id, "amount": bet}}
-            )
-            return {"sucess": 200}
-        if _type.lower() in ["odd", "even"]:
-            self.roulettegames[ctx.guild.id]["oddoreven"].append(
-                {_type.lower(): {"user": ctx.author.id, "amount": bet}}
-            )
-            return {"sucess": 200}
-        if _type.lower() in ["1st half", "2nd half"]:
-            self.roulettegames[ctx.guild.id]["half"].append(
-                {_type.lower(): {"user": ctx.author.id, "amount": bet}}
-            )
-            return {"sucess": 200}
-        if _type.lower() in ["1st column", "2nd column", "3rd column"]:
-            self.roulettegames[ctx.guild.id]["column"].append(
-                {_type.lower(): {"user": ctx.author.id, "amount": bet}}
-            )
-            return {"sucess": 200}
-
         return {"failed": "Not a valid option"}
 
     async def payout(self, ctx, winningnum, bets):
         msg = []
+        print(bets)
         conf = await self.configglobalcheck(ctx)
         payouts = await conf.roulette_payouts()
         color = NUMBERS[winningnum]
         odd_even = "odd" if winningnum % 2 != 0 else "even"
         half = "1st half" if winningnum <= 18 else "2nd half"
+        dozen = "N/A"
         if bets["dozen"]:
             if winningnum == 0:
                 dozen = "No dozen winning bet."
@@ -124,6 +139,7 @@ class Roulette(MixinMeta):
                 dozen = "2nd dozen"
             else:
                 dozen = "3rd dozen"
+        column = "N/A"
         if bets["column"]:
             if winningnum == 0:
                 pass
@@ -133,153 +149,37 @@ class Roulette(MixinMeta):
                 column = "2nd column"
             else:
                 column = "3rd column"
-        for bet in bets["zero"]:
-            bet_type = list(bet.keys())[0]
-            if bet_type == winningnum:
-                betinfo = list(bet.values())[0]
-                user = ctx.guild.get_member(betinfo["user"])
-                payout = betinfo["amount"] + (betinfo["amount"] * payouts["zero"])
-                if not await self.walletdisabledcheck(ctx):
-                    user_conf = await self.configglobalcheckuser(user)
-                    wallet = await user_conf.wallet()
-                    try:
-                        await self.walletdeposit(ctx, user, payout)
-                    except ValueError:
-                        max_bal = await conf.wallet_max()
-                        payout = max_bal - wallet
-                else:
-                    try:
-                        await bank.deposit_credits(user, payout)
-                    except BalanceTooHigh as e:
-                        payout = e.max_bal - await bank.get_balance(user)
-                        await bank.set_balance(user, e.max_bal)
-                msg.append([bet_type, humanize_number(payout), user.display_name])
-        for bet in bets["color"]:
-            bet_type = list(bet.keys())[0]
-            if bet_type == color:
-                betinfo = list(bet.values())[0]
-                user = ctx.guild.get_member(betinfo["user"])
-                payout = betinfo["amount"] + (betinfo["amount"] * payouts["color"])
-                if not await self.walletdisabledcheck(ctx):
-                    user_conf = await self.configglobalcheckuser(user)
-                    wallet = await user_conf.wallet()
-                    try:
-                        await self.walletdeposit(ctx, user, payout)
-                    except ValueError:
-                        max_bal = await conf.wallet_max()
-                        payout = max_bal - wallet
-                else:
-                    try:
-                        await bank.deposit_credits(user, payout)
-                    except BalanceTooHigh as e:
-                        payout = e.max_bal - await bank.get_balance(user)
-                        await bank.set_balance(user, e.max_bal)
-                msg.append([bet_type, humanize_number(payout), user.display_name])
-        for bet in bets["number"]:
-            bet_type = list(bet.keys())[0]
-            if bet_type == winningnum:
-                betinfo = list(bet.values())[0]
-                user = ctx.guild.get_member(betinfo["user"])
-                payout = betinfo["amount"] + (betinfo["amount"] * payouts["single"])
-                if not await self.walletdisabledcheck(ctx):
-                    user_conf = await self.configglobalcheckuser(user)
-                    wallet = await user_conf.wallet()
-                    try:
-                        await self.walletdeposit(ctx, user, payout)
-                    except ValueError:
-                        max_bal = await conf.wallet_max()
-                        payout = max_bal - wallet
-                else:
-                    try:
-                        await bank.deposit_credits(user, payout)
-                    except BalanceTooHigh as e:
-                        payout = e.max_bal - await bank.get_balance(user)
-                        await bank.set_balance(user, e.max_bal)
-                msg.append([bet_type, humanize_number(payout), user.display_name])
-        for bet in bets["oddoreven"]:
-            bet_type = list(bet.keys())[0]
-            if bet_type == odd_even:
-                betinfo = list(bet.values())[0]
-                user = ctx.guild.get_member(betinfo["user"])
-                payout = betinfo["amount"] + (betinfo["amount"] * payouts["odd_or_even"])
-                if not await self.walletdisabledcheck(ctx):
-                    user_conf = await self.configglobalcheckuser(user)
-                    wallet = await user_conf.wallet()
-                    try:
-                        await self.walletdeposit(ctx, user, payout)
-                    except ValueError:
-                        max_bal = await conf.wallet_max()
-                        payout = max_bal - wallet
-                else:
-                    try:
-                        await bank.deposit_credits(user, payout)
-                    except BalanceTooHigh as e:
-                        payout = e.max_bal - await bank.get_balance(user)
-                        await bank.set_balance(user, e.max_bal)
-                msg.append([bet_type, humanize_number(payout), user.display_name])
-        for bet in bets["half"]:
-            bet_type = list(bet.keys())[0]
-            if bet_type == half:
-                betinfo = list(bet.values())[0]
-                user = ctx.guild.get_member(betinfo["user"])
-                payout = betinfo["amount"] + (betinfo["amount"] * payouts["halfs"])
-                if not await self.walletdisabledcheck(ctx):
-                    user_conf = await self.configglobalcheckuser(user)
-                    wallet = await user_conf.wallet()
-                    try:
-                        await self.walletdeposit(ctx, user, payout)
-                    except ValueError:
-                        max_bal = await conf.wallet_max()
-                        payout = max_bal - wallet
-                else:
-                    try:
-                        await bank.deposit_credits(user, payout)
-                    except BalanceTooHigh as e:
-                        payout = e.max_bal - await bank.get_balance(user)
-                        await bank.set_balance(user, e.max_bal)
-                msg.append([bet_type, humanize_number(payout), user.display_name])
-        for bet in bets["dozen"]:
-            bet_type = list(bet.keys())[0]
-            if bet_type == dozen:
-                betinfo = list(bet.values())[0]
-                user = ctx.guild.get_member(betinfo["user"])
-                payout = betinfo["amount"] + (betinfo["amount"] * payouts["dozen"])
-                if not await self.walletdisabledcheck(ctx):
-                    user_conf = await self.configglobalcheckuser(user)
-                    wallet = await user_conf.wallet()
-                    try:
-                        await self.walletdeposit(ctx, user, payout)
-                    except ValueError:
-                        max_bal = await conf.wallet_max()
-                        payout = max_bal - wallet
-                else:
-                    try:
-                        await bank.deposit_credits(user, payout)
-                    except BalanceTooHigh as e:
-                        payout = e.max_bal - await bank.get_balance(user)
-                        await bank.set_balance(user, e.max_bal)
-                msg.append([bet_type, humanize_number(payout), user.display_name])
-        for bet in bets["column"]:
-            bet_type = list(bet.keys())[0]
-            if bet_type == column:
-                betinfo = list(bet.values())[0]
-                user = ctx.guild.get_member(betinfo["user"])
-                payout = betinfo["amount"] + (betinfo["amount"] * payouts["column"])
-                if not await self.walletdisabledcheck(ctx):
-                    user_conf = await self.configglobalcheckuser(user)
-                    wallet = await user_conf.wallet()
-                    try:
-                        await self.walletdeposit(ctx, user, payout)
-                    except ValueError:
-                        max_bal = await conf.wallet_max()
-                        payout = max_bal - wallet
-                else:
-                    try:
-                        await bank.deposit_credits(user, payout)
-                    except BalanceTooHigh as e:
-                        payout = e.max_bal - await bank.get_balance(user)
-                        await bank.set_balance(user, e.max_bal)
-                msg.append([bet_type, humanize_number(payout), user.display_name])
+        payout_types = {
+            "zero": winningnum,
+            "color": color,
+            "number": winningnum,
+            "odd_or_even": odd_even,
+            "halfs": half,
+            "dozen": dozen,
+            "column": column,
+        }
+        for bettype in payout_types:
+            for bet in bets[bettype]:
+                bet_type = list(bet.keys())[0]
+                if bet_type == payout_types[bettype]:
+                    betinfo = list(bet.values())[0]
+                    user = ctx.guild.get_member(betinfo["user"])
+                    payout = betinfo["amount"] + (betinfo["amount"] * payouts[bettype])
+                    if not await self.walletdisabledcheck(ctx):
+                        user_conf = await self.configglobalcheckuser(user)
+                        wallet = await user_conf.wallet()
+                        try:
+                            await self.walletdeposit(ctx, user, payout)
+                        except ValueError:
+                            max_bal = await conf.wallet_max()
+                            payout = max_bal - wallet
+                    else:
+                        try:
+                            await bank.deposit_credits(user, payout)
+                        except BalanceTooHigh as e:
+                            payout = e.max_bal - await bank.get_balance(user)
+                            await bank.set_balance(user, e.max_bal)
+                    msg.append([bet_type, humanize_number(payout), user.display_name])
         return msg
 
     @commands.group(invoke_without_command=True)
@@ -310,13 +210,6 @@ class Roulette(MixinMeta):
             return await ctx.send(f"Your bet must be greater than {humanize_number(minbet)}.")
         if amount > maxbet:
             return await ctx.send(f"Your bet must be less than {humanize_number(maxbet)}.")
-        try:
-            if not await self.walletdisabledcheck(ctx):
-                await self.walletwithdraw(ctx.author, amount)
-            else:
-                await bank.withdraw_credits(ctx.author, amount)
-        except ValueError:
-            return await ctx.send("You do not have enough funds to complete this bet.")
         betret = await self.betting(ctx, amount, bet)
         if betret.get("failed") is not None:
             return await ctx.send(betret["failed"])
@@ -334,8 +227,8 @@ class Roulette(MixinMeta):
                 "color": [],
                 "number": [],
                 "dozen": [],
-                "oddoreven": [],
-                "half": [],
+                "odd_or_even": [],
+                "halfs": [],
                 "column": [],
                 "started": False,
             }
